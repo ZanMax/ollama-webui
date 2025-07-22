@@ -1,2 +1,2 @@
-# ollama-webui
+# Ollama WebUI
 Simple webui for olllama
