@@ -21,7 +21,13 @@
         .tab.active { background-color: #374151; }
         .tab:not(.active):hover { background-color: #4b5563; }
         .chat-panel { display: none; }
-        .chat-panel.active { display: block; }
+        .chat-panel.active { display: flex; flex-direction: column; }
+        .thinking-process { display: none; }
+        .thinking-indicator { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: .5; }
+        }
     </style>
 </head>
 <body class="bg-gray-900 text-white font-sans flex flex-col h-screen">
@@ -35,7 +41,6 @@
 
     <!-- Tab Bar -->
     <div id="tab-bar" class="bg-gray-800 flex items-center border-b border-gray-700">
-        <!-- Tabs will be injected here -->
         <button id="new-tab-btn" title="New Tab" class="p-3 text-gray-400 hover:bg-gray-700 hover:text-white">
             <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clip-rule="evenodd" /></svg>
         </button>
@@ -77,7 +82,6 @@
 
     <script>
     document.addEventListener('DOMContentLoaded', () => {
-        // --- DOM Elements ---
         const settingsBtn = document.getElementById('settings-btn');
         const newTabBtn = document.getElementById('new-tab-btn');
         const settingsModal = document.getElementById('settings-modal');
@@ -88,23 +92,22 @@
         const modelsStatus = document.getElementById('models-status');
         const chatForm = document.getElementById('chat-form');
         const messageInput = document.getElementById('message-input');
+        const sendButton = document.getElementById('send-button');
         const tabBar = document.getElementById('tab-bar');
         const chatContainer = document.getElementById('chat-container');
 
-        // --- State Management ---
         let tabs = [];
         let activeTabId = null;
         let availableServers = [];
         let initialConfig = { server: null, model: null };
 
-        // --- Core Functions ---
         const saveState = () => {
             const stateToSave = tabs.map(tab => ({
                 id: tab.id,
                 name: tab.name,
                 server: tab.server,
                 model: tab.model,
-                conversationHistory: tab.conversationHistory
+                conversationHistory: tab.conversationHistory.map(msg => ({...msg, thinkingVisible: msg.thinkingVisible || false }))
             }));
             localStorage.setItem('ollamaTabs', JSON.stringify(stateToSave));
             localStorage.setItem('ollamaActiveTab', activeTabId);
@@ -116,9 +119,6 @@
             if (savedTabs && savedTabs.length > 0) {
                 tabs = savedTabs;
                 activeTabId = savedActiveTab && tabs.some(t => t.id === savedActiveTab) ? savedActiveTab : tabs[0].id;
-            } else {
-                // If no saved state, create the first tab after fetching servers
-                // This will be handled in the init function
             }
         };
 
@@ -128,7 +128,6 @@
             saveState();
         };
 
-        // --- Tab Management ---
         const addNewTab = (makeActive = true) => {
             const tabId = `tab-${Date.now()}`;
             const newTab = {
@@ -139,16 +138,9 @@
                 conversationHistory: []
             };
             tabs.push(newTab);
-            if (makeActive) {
-                activeTabId = tabId;
-            }
+            if (makeActive) activeTabId = tabId;
             render();
-            if (makeActive) {
-                 // Open settings if no model is configured for the new tab
-                if (!newTab.model) {
-                    openSettings();
-                }
-            }
+            if (makeActive && !newTab.model) openSettings();
         };
 
         const switchTab = (tabId) => {
@@ -159,22 +151,18 @@
         };
 
         const closeTab = (e, tabId) => {
-            e.stopPropagation(); // Prevent switchTab from firing
+            e.stopPropagation();
+            const tabIndex = tabs.findIndex(t => t.id === tabId);
             tabs = tabs.filter(t => t.id !== tabId);
             if (activeTabId === tabId) {
-                activeTabId = tabs.length > 0 ? tabs[Math.max(0, tabs.findIndex(t => t.id === tabId) - 1)].id : null;
-                 if (tabs.length > 0 && !activeTabId) activeTabId = tabs[0].id;
+                activeTabId = tabs.length > 0 ? tabs[Math.max(0, tabIndex - 1)].id : null;
+                if (tabs.length > 0 && !tabs.some(t=>t.id === activeTabId)) activeTabId = tabs[0].id;
             }
-            if (tabs.length === 0) {
-                addNewTab();
-            } else {
-                render();
-            }
+            if (tabs.length === 0) addNewTab();
+            else render();
         };
 
-        // --- Rendering ---
         const renderTabs = () => {
-            // Clear all but the "new tab" button
             while (tabBar.firstChild && tabBar.firstChild !== newTabBtn) {
                 tabBar.removeChild(tabBar.firstChild);
             }
@@ -187,42 +175,38 @@
                     <button class="close-tab-btn text-gray-500 hover:text-white rounded-full w-5 h-5 flex items-center justify-center hover:bg-gray-600">&times;</button>
                 `;
                 tabBar.insertBefore(tabEl, newTabBtn);
-
                 tabEl.addEventListener('click', () => switchTab(tab.id));
                 tabEl.querySelector('.close-tab-btn').addEventListener('click', (e) => closeTab(e, tab.id));
             });
         };
 
         const renderChatPanels = () => {
-            chatContainer.innerHTML = ''; // Clear all panels
+            chatContainer.innerHTML = '';
             tabs.forEach(tab => {
                 const panel = document.createElement('div');
-                panel.className = `chat-panel h-full overflow-y-auto p-4 md:p-6 space-y-6 max-w-4xl mx-auto ${tab.id === activeTabId ? 'active' : ''}`;
-                panel.dataset.panelId = tab.id;
-
+                panel.className = `chat-panel h-full overflow-y-auto ${tab.id === activeTabId ? 'active' : ''}`;
+                const messageList = document.createElement('div');
+                messageList.className = 'p-4 md:p-6 space-y-6 max-w-4xl mx-auto w-full';
+                panel.appendChild(messageList);
                 if (tab.conversationHistory.length === 0) {
-                    panel.innerHTML = `<div class="flex items-start gap-4">
+                    messageList.innerHTML = `<div class="flex items-start gap-4">
                         <div class="bg-blue-600 p-2 rounded-full flex-shrink-0"><svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg></div>
                         <div class="bg-gray-800 rounded-lg p-4 prose prose-invert max-w-none"><p>Hello! Ask me anything, or change the server/model for this tab in the settings.</p></div>
                     </div>`;
                 } else {
-                    tab.conversationHistory.forEach(msg => {
-                        createMessageElement(msg.role, msg.content, panel, false);
+                    tab.conversationHistory.forEach((msg) => {
+                        createMessageElement(msg, messageList, false);
                     });
                 }
                 chatContainer.appendChild(panel);
             });
-            // Scroll active panel to bottom
             const activePanel = chatContainer.querySelector('.chat-panel.active');
             if(activePanel) activePanel.scrollTop = activePanel.scrollHeight;
         };
 
-        // --- Settings Modal Logic ---
         const openSettings = async () => {
             const activeTab = tabs.find(t => t.id === activeTabId);
             if (!activeTab) return;
-
-            // Populate servers
             serverSelect.innerHTML = '';
             availableServers.forEach(serverName => {
                 const option = document.createElement('option');
@@ -231,7 +215,6 @@
                 option.selected = serverName === activeTab.server;
                 serverSelect.appendChild(option);
             });
-
             settingsModal.classList.remove('hidden');
             await fetchModelsForActiveTab();
         };
@@ -243,10 +226,8 @@
                 modelsStatus.textContent = 'Select a server to see models.';
                 return;
             }
-            
             modelsStatus.innerHTML = '<span class="loader"></span> Fetching models...';
             modelSelect.innerHTML = '';
-
             try {
                 const response = await fetch('/api/tags', {
                     method: 'POST',
@@ -254,16 +235,13 @@
                     body: JSON.stringify({ server: server })
                 });
                 if (!response.ok) throw new Error(`Server responded with ${response.status}`);
-                
                 const data = await response.json();
                 const activeTab = tabs.find(t => t.id === activeTabId);
-
                 if (data.models && data.models.length > 0) {
                     data.models.forEach(model => {
                         const option = document.createElement('option');
                         option.value = model.name;
                         option.textContent = model.name;
-                        // Select current model for the tab, or the first one if none is set
                         option.selected = model.name === activeTab.model;
                         modelSelect.appendChild(option);
                     });
@@ -272,7 +250,6 @@
                     modelsStatus.textContent = 'No models found on this server.';
                 }
             } catch (error) {
-                console.error('Error fetching models:', error);
                 modelsStatus.textContent = 'Error fetching models.';
             }
         };
@@ -280,20 +257,15 @@
         const saveSettings = () => {
             const activeTab = tabs.find(t => t.id === activeTabId);
             if (!activeTab) return;
-
             const newServer = serverSelect.value;
             const newModel = modelSelect.value;
-
             if (newServer && newModel) {
                 activeTab.server = newServer;
                 activeTab.model = newModel;
-                
-                // Save as initial config if it's the first time
                 if (!initialConfig.server) {
                     initialConfig.server = newServer;
                     initialConfig.model = newModel;
                 }
-
                 addSystemMessage(`Tab settings updated. Now using <strong>${newModel}</strong> on <strong>${newServer}</strong>.`);
                 settingsModal.classList.add('hidden');
                 saveState();
@@ -302,32 +274,32 @@
             }
         };
 
-        // --- Chat Logic ---
         chatForm.addEventListener('submit', async (e) => {
             e.preventDefault();
             const userInput = messageInput.value.trim();
             if (!userInput) return;
-
             const activeTab = tabs.find(t => t.id === activeTabId);
             if (!activeTab || !activeTab.server || !activeTab.model) {
                 addSystemMessage('Please configure a server and model for this tab in settings.');
                 openSettings();
                 return;
             }
-
-            const activePanel = document.querySelector(`.chat-panel[data-panel-id="${activeTabId}"]`);
-            if (activeTab.conversationHistory.length === 0) {
-                activePanel.innerHTML = ''; // Clear welcome message
-            }
-
-            activeTab.conversationHistory.push({ role: 'user', content: userInput });
-            createMessageElement('user', userInput, activePanel);
+            const activePanel = document.querySelector('.chat-panel.active > div');
+            if (activeTab.conversationHistory.length === 0) activePanel.innerHTML = '';
+            
+            const userMessage = { role: 'user', content: userInput };
+            activeTab.conversationHistory.push(userMessage);
+            createMessageElement(userMessage, activePanel);
             
             messageInput.value = '';
             messageInput.style.height = 'auto';
 
-            const aiMessageElement = createMessageElement('assistant', '<span class="animate-pulse">...</span>', activePanel);
-            
+            const assistantMessage = { role: 'assistant', content: '', thinking: '', thinkingVisible: false };
+            activeTab.conversationHistory.push(assistantMessage);
+            const assistantMessageWrapper = createMessageElement(assistantMessage, activePanel);
+            const assistantContentDiv = assistantMessageWrapper.querySelector('.prose');
+            assistantContentDiv.innerHTML = '<span class="animate-pulse">...</span>';
+
             try {
                 const response = await fetch('/api/chat', {
                     method: 'POST',
@@ -335,87 +307,169 @@
                     body: JSON.stringify({
                         server: activeTab.server,
                         model: activeTab.model,
-                        messages: activeTab.conversationHistory
+                        messages: activeTab.conversationHistory.slice(0, -1)
                     })
                 });
-
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder();
                 let fullResponse = '';
+                let thinkingContent = '';
+                let isThinking = false;
+                let leftover = '';
+                let thinkingIndicator = null;
                 
                 while (true) {
                     const { done, value } = await reader.read();
                     if (done) break;
                     
                     const chunk = decoder.decode(value, { stream: true });
-                    const lines = chunk.split('\n').filter(line => line.trim() !== '');
+                    const lines = (leftover + chunk).split('\n');
+                    leftover = lines.pop() || '';
 
                     for (const line of lines) {
+                        if (line.trim() === '') continue;
                         try {
                             const parsed = JSON.parse(line);
-                            if (parsed.message && parsed.message.content) {
-                                fullResponse += parsed.message.content;
-                                aiMessageElement.innerHTML = marked.parse(fullResponse);
-                                activePanel.scrollTop = activePanel.scrollHeight;
+                            let content = parsed.message?.content || '';
+                            
+                            while (content) {
+                                if (isThinking) {
+                                    const endIndex = content.indexOf('</think>');
+                                    if (endIndex !== -1) {
+                                        thinkingContent += content.substring(0, endIndex);
+                                        content = content.substring(endIndex + 8);
+                                        isThinking = false;
+                                        if (thinkingIndicator) {
+                                            thinkingIndicator.remove();
+                                            thinkingIndicator = null;
+                                        }
+                                    } else {
+                                        thinkingContent += content;
+                                        content = '';
+                                    }
+                                } else {
+                                    const startIndex = content.indexOf('<think>');
+                                    if (startIndex !== -1) {
+                                        fullResponse += content.substring(0, startIndex);
+                                        content = content.substring(startIndex + 7);
+                                        isThinking = true;
+                                        if (!thinkingIndicator) {
+                                            thinkingIndicator = document.createElement('div');
+                                            thinkingIndicator.className = 'thinking-indicator text-sm text-gray-400 italic';
+                                            thinkingIndicator.textContent = 'Thinking...';
+                                            assistantContentDiv.prepend(thinkingIndicator);
+                                        }
+                                    } else {
+                                        fullResponse += content;
+                                        content = '';
+                                    }
+                                }
                             }
-                            if (parsed.done) {
-                                activeTab.conversationHistory.push({ role: 'assistant', content: fullResponse });
-                                finalizeMessage(aiMessageElement);
-                                saveState();
+                            const contentToShow = fullResponse || (isThinking ? '' : '<span class="animate-pulse">...</span>');
+                            const finalContentContainer = assistantContentDiv.querySelector('.final-content');
+                            if (finalContentContainer) {
+                                finalContentContainer.innerHTML = marked.parse(contentToShow);
                             }
-                        } catch (err) { /* Ignore parsing errors in stream */ }
+                        } catch (e) {
+                            // console.error("JSON parse error", e);
+                        }
                     }
+                    activePanel.parentElement.scrollTop = activePanel.parentElement.scrollHeight;
                 }
+                
+                if (thinkingIndicator) thinkingIndicator.remove();
+                assistantMessage.content = fullResponse || " ";
+                assistantMessage.thinking = thinkingContent;
+                assistantContentDiv.innerHTML = '';
+                finalizeMessage(assistantMessageWrapper, assistantMessage);
+                saveState();
+
             } catch (error) {
-                aiMessageElement.innerHTML = `Error: Could not connect to backend. Details: ${error.message}`;
+                assistantContentDiv.innerHTML = `Error: Could not connect to backend. Details: ${error.message}`;
             }
         });
 
-        // --- UI Helper Functions ---
-        const createMessageElement = (role, content, parentElement, shouldScroll = true) => {
+        const finalizeMessage = (messageWrapper, message) => {
+            const contentDiv = messageWrapper.querySelector('.prose');
+            contentDiv.innerHTML = ''; // Clear previous content
+
+            if (message.thinking) {
+                const toggleButton = document.createElement('button');
+                toggleButton.className = 'thinking-toggle-btn text-xs text-blue-400 hover:underline mb-2';
+                toggleButton.textContent = message.thinkingVisible ? 'Hide Thinking' : 'Show Thinking';
+                contentDiv.appendChild(toggleButton);
+
+                const thinkingContainer = document.createElement('div');
+                thinkingContainer.className = 'thinking-process border-t border-gray-700 mt-2 pt-2';
+                thinkingContainer.innerHTML = marked.parse(message.thinking);
+                thinkingContainer.style.display = message.thinkingVisible ? 'block' : 'none';
+                
+                toggleButton.onclick = () => {
+                    message.thinkingVisible = !message.thinkingVisible;
+                    thinkingContainer.style.display = message.thinkingVisible ? 'block' : 'none';
+                    toggleButton.textContent = message.thinkingVisible ? 'Hide Thinking' : 'Show Thinking';
+                    saveState();
+                };
+                contentDiv.appendChild(thinkingContainer);
+            }
+
+            const finalContentContainer = document.createElement('div');
+            finalContentContainer.className = 'final-content';
+            finalContentContainer.innerHTML = marked.parse(message.content || ' ');
+            contentDiv.appendChild(finalContentContainer);
+
+            contentDiv.querySelectorAll('pre code').forEach((block) => {
+                if (!block.classList.contains('hljs')) hljs.highlightElement(block);
+            });
+            contentDiv.querySelectorAll('pre').forEach((pre) => {
+                if (!pre.querySelector('.copy-btn')) {
+                    pre.style.position = 'relative';
+                    const code = pre.querySelector('code');
+                    const copyButton = document.createElement('button');
+                    copyButton.className = 'copy-btn'; copyButton.textContent = 'Copy';
+                    copyButton.addEventListener('click', () => {
+                        navigator.clipboard.writeText(code.innerText).then(() => {
+                            copyButton.textContent = 'Copied!';
+                            setTimeout(() => { copyButton.textContent = 'Copy'; }, 2000);
+                        });
+                    });
+                    pre.appendChild(copyButton);
+                }
+            });
+        };
+
+        const createMessageElement = (message, parentElement, shouldScroll = true) => {
             const messageWrapper = document.createElement('div');
             messageWrapper.className = 'flex items-start gap-4';
-            let icon = role === 'user' ? `<div class="bg-gray-600 p-2 rounded-full flex-shrink-0"><svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg></div>` : `<div class="bg-blue-600 p-2 rounded-full flex-shrink-0"><svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg></div>`;
-            const contentBg = role === 'user' ? 'bg-gray-700' : 'bg-gray-800';
+            let icon = message.role === 'user' ? `<div class="bg-gray-600 p-2 rounded-full flex-shrink-0"><svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg></div>` : `<div class="bg-blue-600 p-2 rounded-full flex-shrink-0"><svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg></div>`;
+            const contentBg = message.role === 'user' ? 'bg-gray-700' : 'bg-gray-800';
             const contentDiv = document.createElement('div');
             contentDiv.className = `${contentBg} rounded-lg p-4 prose prose-invert max-w-none`;
-            contentDiv.innerHTML = role === 'user' ? `<p>${content.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</p>` : content;
             
             messageWrapper.innerHTML = icon;
             messageWrapper.appendChild(contentDiv);
             parentElement.appendChild(messageWrapper);
-            if (shouldScroll) parentElement.scrollTop = parentElement.scrollHeight;
-            return contentDiv;
+
+            if (message.role === 'user') {
+                contentDiv.innerHTML = `<p>${message.content.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</p>`;
+            } else {
+                finalizeMessage(messageWrapper, message);
+            }
+
+            if (shouldScroll) parentElement.parentElement.scrollTop = parentElement.parentElement.scrollHeight;
+            return messageWrapper;
         };
         
         const addSystemMessage = (html) => {
-            const activePanel = document.querySelector('.chat-panel.active');
+            const activePanel = document.querySelector('.chat-panel.active > div');
             if (!activePanel) return;
             const systemMessage = document.createElement('div');
             systemMessage.className = 'text-center text-sm text-gray-400 py-2';
             systemMessage.innerHTML = html;
             activePanel.appendChild(systemMessage);
-            activePanel.scrollTop = activePanel.scrollHeight;
+            activePanel.parentElement.scrollTop = activePanel.parentElement.scrollHeight;
         };
 
-        const finalizeMessage = (messageElement) => {
-            messageElement.querySelectorAll('pre code').forEach((block) => hljs.highlightElement(block));
-            messageElement.querySelectorAll('pre').forEach((pre) => {
-                pre.style.position = 'relative';
-                const code = pre.querySelector('code');
-                const copyButton = document.createElement('button');
-                copyButton.className = 'copy-btn'; copyButton.textContent = 'Copy';
-                copyButton.addEventListener('click', () => {
-                    navigator.clipboard.writeText(code.innerText).then(() => {
-                        copyButton.textContent = 'Copied!';
-                        setTimeout(() => { copyButton.textContent = 'Copy'; }, 2000);
-                    });
-                });
-                pre.appendChild(copyButton);
-            });
-        };
-
-        // --- Initialization ---
         const init = async () => {
             try {
                 const response = await fetch('/servers');
@@ -423,19 +477,13 @@
                 if (data.servers && data.servers.length > 0) {
                     availableServers = data.servers;
                     initialConfig.server = availableServers[0];
-                } else {
-                    console.error("No servers configured in backend.");
                 }
             } catch (e) {
                 console.error("Failed to fetch servers from backend.", e);
             }
-
             loadState();
-            if (tabs.length === 0) {
-                addNewTab(true);
-            } else {
-                render();
-            }
+            if (tabs.length === 0) addNewTab(true);
+            else render();
         };
 
         newTabBtn.addEventListener('click', () => addNewTab());
@@ -443,6 +491,12 @@
         cancelSettingsBtn.addEventListener('click', () => settingsModal.classList.add('hidden'));
         saveSettingsBtn.addEventListener('click', saveSettings);
         serverSelect.addEventListener('change', fetchModelsForActiveTab);
+        messageInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                chatForm.requestSubmit();
+            }
+        });
 
         init();
     });
